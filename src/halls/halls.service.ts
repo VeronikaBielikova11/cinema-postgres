@@ -3,53 +3,59 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import {
+  isPgError,
+  PG_FOREIGN_KEY_VIOLATION,
+  PG_UNIQUE_VIOLATION,
+} from '../database/postgres-errors.js';
 import { CreateHallDto } from './dto/create-hall.dto.js';
 import { Hall, HallWithSeats, Seat } from './entities/hall.entity.js';
 
 @Injectable()
 export class HallsService {
-  private readonly halls: Hall[] = [];
-  private readonly usageChecks: ((hallId: string) => boolean)[] = [];
+  constructor(
+    @InjectRepository(Hall)
+    private readonly hallsRepository: Repository<Hall>,
+  ) {}
 
-  // Showings depend on halls, so they report their references through this hook
-  // and HallsModule does not have to import ShowingsModule back.
-  registerUsageCheck(check: (hallId: string) => boolean) {
-    this.usageChecks.push(check);
-  }
-
-  create(dto: CreateHallDto): Hall {
-    if (this.halls.some((hall) => hall.name === dto.name)) {
-      throw new ConflictException(`Hall named "${dto.name}" already exists`);
-    }
-    const hall: Hall = {
-      id: randomUUID(),
+  async create(dto: CreateHallDto): Promise<Hall> {
+    const hall = this.hallsRepository.create({
       name: dto.name,
       rows: dto.rows,
       seatsPerRow: dto.seatsPerRow,
-    };
-    this.halls.push(hall);
-    return hall;
+    });
+    try {
+      // The unique constraint on halls.name settles the race between two
+      // requests with the same name, so there is no separate lookup first.
+      return await this.hallsRepository.save(hall);
+    } catch (error) {
+      if (isPgError(error, PG_UNIQUE_VIOLATION)) {
+        throw new ConflictException(`Hall named "${dto.name}" already exists`);
+      }
+      throw error;
+    }
   }
 
-  findAll(): Hall[] {
-    return this.halls;
+  findAll(): Promise<Hall[]> {
+    return this.hallsRepository.find({ order: { name: 'ASC' } });
   }
 
-  findById(id: string): Hall | undefined {
-    return this.halls.find((hall) => hall.id === id);
+  findById(id: string): Promise<Hall | null> {
+    return this.hallsRepository.findOneBy({ id });
   }
 
-  findOne(id: string): Hall {
-    const hall = this.findById(id);
+  async findOne(id: string): Promise<Hall> {
+    const hall = await this.findById(id);
     if (!hall) {
       throw new NotFoundException(`Hall with id "${id}" not found`);
     }
     return hall;
   }
 
-  findOneWithSeats(id: string): HallWithSeats {
-    const hall = this.findOne(id);
+  async findOneWithSeats(id: string): Promise<HallWithSeats> {
+    const hall = await this.findOne(id);
     return { ...hall, seats: this.listSeats(hall) };
   }
 
@@ -67,13 +73,20 @@ export class HallsService {
     return row <= hall.rows && seat <= hall.seatsPerRow;
   }
 
-  remove(id: string): void {
-    const hall = this.findOne(id);
-    if (this.usageChecks.some((isUsed) => isUsed(id))) {
-      throw new ConflictException(
-        `Hall with id "${id}" is referenced by a showing`,
-      );
+  async remove(id: string): Promise<void> {
+    try {
+      const { affected } = await this.hallsRepository.delete({ id });
+      if (!affected) {
+        throw new NotFoundException(`Hall with id "${id}" not found`);
+      }
+    } catch (error) {
+      // showings.hall_id is ON DELETE RESTRICT, so the database itself refuses.
+      if (isPgError(error, PG_FOREIGN_KEY_VIOLATION)) {
+        throw new ConflictException(
+          `Hall with id "${id}" is referenced by a showing and cannot be deleted`,
+        );
+      }
+      throw error;
     }
-    this.halls.splice(this.halls.indexOf(hall), 1);
   }
 }

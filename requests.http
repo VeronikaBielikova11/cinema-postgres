@@ -1,5 +1,7 @@
 # Виконуйте запити послідовно згори вниз (розширення REST Client для VS Code).
 # Очікуваний код відповіді вказаний у заголовку кожного запиту після стрілки.
+# Перед запуском: npm run db:up, npm run migration:run, npm run start:dev.
+# Помилки мають єдину структуру: { statusCode, message, error, path, timestamp }.
 
 @baseUrl = http://localhost:3000
 @missingId = 00000000-0000-4000-8000-000000000000
@@ -288,8 +290,17 @@ Content-Type: application/json
   "price": 125.5
 }
 
-### GET /showings: усі сеанси за часом початку → 200
+### GET /showings: перша сторінка за часом початку { items, total, page: 1, limit: 20 } → 200
 GET {{baseUrl}}/showings
+
+### GET /showings?page&limit: друга сторінка по 2 сеанси → 200
+GET {{baseUrl}}/showings?page=2&limit=2
+
+### GET /showings?sort=desc: від найпізнішого сеансу → 200
+GET {{baseUrl}}/showings?sort=desc
+
+### GET /showings?filmId&page&limit&sort: усі параметри разом → 200
+GET {{baseUrl}}/showings?filmId={{filmId}}&page=1&limit=1&sort=desc
 
 ### GET /showings?filmId: сеанси фільму → 200
 GET {{baseUrl}}/showings?filmId={{filmId}}
@@ -303,6 +314,24 @@ GET {{baseUrl}}/showings?filmId={{filmId}}&date=2030-06-15
 ### GET /showings?date: date не відповідає формату → 400
 GET {{baseUrl}}/showings?date=15.06.2030
 
+### GET /showings?page: page не є цілим числом → 400
+GET {{baseUrl}}/showings?page=1.5
+
+### GET /showings?page: page менше за 1 → 400
+GET {{baseUrl}}/showings?page=0
+
+### GET /showings?limit: limit не є цілим числом → 400
+GET {{baseUrl}}/showings?limit=ten
+
+### GET /showings?limit: limit менше за 1 → 400
+GET {{baseUrl}}/showings?limit=0
+
+### GET /showings?limit: limit більше за 100 → 400
+GET {{baseUrl}}/showings?limit=101
+
+### GET /showings?sort: sort не asc і не desc → 400
+GET {{baseUrl}}/showings?sort=newest
+
 ### GET /showings/:id: один сеанс → 200
 GET {{baseUrl}}/showings/{{showingId}}
 
@@ -315,10 +344,10 @@ GET {{baseUrl}}/showings/{{showingId}}/seats
 ### GET /showings/:id/seats: сеансу немає → 404
 GET {{baseUrl}}/showings/{{missingId}}/seats
 
-### DELETE /films/:id: на фільм посилається сеанс → 409
+### DELETE /films/:id: на фільм посилається сеанс, фільм і сеанси лишаються → 409
 DELETE {{baseUrl}}/films/{{filmId}}
 
-### DELETE /halls/:id: на зал посилається сеанс → 409
+### DELETE /halls/:id: на зал посилається сеанс, зал і сеанси лишаються → 409
 DELETE {{baseUrl}}/halls/{{hallId}}
 
 ###############################################################################
@@ -416,7 +445,7 @@ Content-Type: application/json
   ]
 }
 
-### POST /showings/:id/bookings: місце 1-2 зайняте, вільне 2-2 теж не бронюється → 409
+### POST /showings/:id/bookings: місце 1-2 зайняте, транзакція відкочується і вільне 2-2 теж не бронюється → 409
 POST {{baseUrl}}/showings/{{showingId}}/bookings
 Content-Type: application/json
 

@@ -1,24 +1,39 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { Seat } from '../../halls/entities/hall.entity.js';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+  PrimaryGeneratedColumn,
+  type Relation,
+} from 'typeorm';
+import { Showing } from '../../showings/entities/showing.entity.js';
+import { BookingSeat } from './booking-seat.entity.js';
 
+@Entity('bookings')
 export class Booking {
-  @ApiProperty({ format: 'uuid' })
+  @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @ApiProperty({ format: 'uuid' })
+  @Index()
+  @Column({ name: 'showing_id', type: 'uuid' })
   showingId: string;
 
-  @ApiProperty({ type: [Seat] })
-  seats: Seat[];
-
-  @ApiProperty({
-    example: 25000,
-    description: 'Ціна сеансу, помножена на кількість місць, у копійках',
-  })
+  @Column({ name: 'total_price', type: 'integer' })
   totalPrice: number;
-}
 
-export class ShowingSeat extends Seat {
-  @ApiProperty({ example: false })
-  isBooked: boolean;
+  @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
+  createdAt: Date;
+
+  @ManyToOne(() => Showing, (showing) => showing.bookings, {
+    nullable: false,
+    onDelete: 'RESTRICT',
+  })
+  @JoinColumn({ name: 'showing_id' })
+  showing?: Relation<Showing>;
+
+  @OneToMany(() => BookingSeat, (seat) => seat.booking)
+  seats?: Relation<BookingSeat>[];
 }

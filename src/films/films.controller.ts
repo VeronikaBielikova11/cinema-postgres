@@ -36,14 +36,14 @@ export class FilmsController {
   @ApiBadRequestResponse({
     description: 'Поле відсутнє або має неправильний тип',
   })
-  create(@Body() dto: CreateFilmDto): Film {
+  create(@Body() dto: CreateFilmDto): Promise<Film> {
     return this.filmsService.create(dto);
   }
 
   @Get()
   @ApiOperation({ summary: 'Отримати всі фільми' })
   @ApiOkResponse({ type: [Film], description: 'Масив фільмів' })
-  findAll(): Film[] {
+  findAll(): Promise<Film[]> {
     return this.filmsService.findAll();
   }
 
@@ -51,7 +51,7 @@ export class FilmsController {
   @ApiOperation({ summary: 'Отримати фільм' })
   @ApiOkResponse({ type: Film, description: 'Фільм' })
   @ApiNotFoundResponse({ description: 'Фільму з таким id немає' })
-  findOne(@Param('id', parseIdPipe) id: string): Film {
+  findOne(@Param('id', parseIdPipe) id: string): Promise<Film> {
     return this.filmsService.findOne(id);
   }
 
@@ -63,7 +63,7 @@ export class FilmsController {
   update(
     @Param('id', parseIdPipe) id: string,
     @Body() dto: UpdateFilmDto,
-  ): Film {
+  ): Promise<Film> {
     return this.filmsService.update(id, dto);
   }
 
@@ -73,7 +73,7 @@ export class FilmsController {
   @ApiNoContentResponse({ description: 'Фільм видалено' })
   @ApiNotFoundResponse({ description: 'Фільму з таким id немає' })
   @ApiConflictResponse({ description: 'На фільм посилається сеанс' })
-  remove(@Param('id', parseIdPipe) id: string): void {
-    this.filmsService.remove(id);
+  remove(@Param('id', parseIdPipe) id: string): Promise<void> {
+    return this.filmsService.remove(id);
   }
 }

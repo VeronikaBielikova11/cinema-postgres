@@ -3,64 +3,72 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { randomUUID } from 'node:crypto';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import {
+  isPgError,
+  PG_FOREIGN_KEY_VIOLATION,
+} from '../database/postgres-errors.js';
 import { CreateFilmDto } from './dto/create-film.dto.js';
 import { UpdateFilmDto } from './dto/update-film.dto.js';
 import { Film } from './entities/film.entity.js';
 
 @Injectable()
 export class FilmsService {
-  private readonly films: Film[] = [];
-  private readonly usageChecks: ((filmId: string) => boolean)[] = [];
+  constructor(
+    @InjectRepository(Film)
+    private readonly filmsRepository: Repository<Film>,
+  ) {}
 
-  // Showings depend on films, so they report their references through this hook
-  // and FilmsModule does not have to import ShowingsModule back.
-  registerUsageCheck(check: (filmId: string) => boolean) {
-    this.usageChecks.push(check);
-  }
-
-  create(dto: CreateFilmDto): Film {
-    const film: Film = {
-      id: randomUUID(),
+  create(dto: CreateFilmDto): Promise<Film> {
+    const film = this.filmsRepository.create({
       title: dto.title,
       durationMinutes: dto.durationMinutes,
       releaseYear: dto.releaseYear,
-    };
-    this.films.push(film);
-    return film;
+    });
+    return this.filmsRepository.save(film);
   }
 
-  findAll(): Film[] {
-    return this.films;
+  findAll(): Promise<Film[]> {
+    return this.filmsRepository.find({ order: { title: 'ASC', id: 'ASC' } });
   }
 
-  findById(id: string): Film | undefined {
-    return this.films.find((film) => film.id === id);
+  findById(id: string): Promise<Film | null> {
+    return this.filmsRepository.findOneBy({ id });
   }
 
-  findOne(id: string): Film {
-    const film = this.findById(id);
+  async findOne(id: string): Promise<Film> {
+    const film = await this.findById(id);
     if (!film) {
       throw new NotFoundException(`Film with id "${id}" not found`);
     }
     return film;
   }
 
-  update(id: string, dto: UpdateFilmDto): Film {
-    const film = this.findOne(id);
-    film.title = dto.title ?? film.title;
-    film.durationMinutes = dto.durationMinutes ?? film.durationMinutes;
-    film.releaseYear = dto.releaseYear ?? film.releaseYear;
-    return film;
+  async update(id: string, dto: UpdateFilmDto): Promise<Film> {
+    const film = await this.findOne(id);
+    this.filmsRepository.merge(film, {
+      title: dto.title ?? film.title,
+      durationMinutes: dto.durationMinutes ?? film.durationMinutes,
+      releaseYear: dto.releaseYear ?? film.releaseYear,
+    });
+    return this.filmsRepository.save(film);
   }
 
-  remove(id: string): void {
-    const film = this.findOne(id);
-    if (this.usageChecks.some((isUsed) => isUsed(id))) {
-      throw new ConflictException(
-        `Film with id "${id}" is referenced by a showing`,
-      );
+  async remove(id: string): Promise<void> {
+    try {
+      const { affected } = await this.filmsRepository.delete({ id });
+      if (!affected) {
+        throw new NotFoundException(`Film with id "${id}" not found`);
+      }
+    } catch (error) {
+      // showings.film_id is ON DELETE RESTRICT, so the database itself refuses.
+      if (isPgError(error, PG_FOREIGN_KEY_VIOLATION)) {
+        throw new ConflictException(
+          `Film with id "${id}" is referenced by a showing and cannot be deleted`,
+        );
+      }
+      throw error;
     }
-    this.films.splice(this.films.indexOf(film), 1);
   }
 }

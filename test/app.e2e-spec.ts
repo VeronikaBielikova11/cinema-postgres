@@ -2,6 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
+import { DataSource } from 'typeorm';
 import { AppModule } from './../src/app.module.js';
 import { setupApp } from './../src/app.setup.js';
 
@@ -48,6 +49,9 @@ describe('Cinema API (e2e)', () => {
     app = moduleRef.createNestApplication();
     setupApp(app);
     await app.init();
+    await app
+      .get(DataSource)
+      .query('TRUNCATE booking_seats, bookings, showings, halls, films');
   });
 
   afterEach(async () => {
@@ -236,7 +240,7 @@ describe('Cinema API (e2e)', () => {
       );
 
       const ids = async (query: string) =>
-        (await api().get(`/showings${query}`).expect(200)).body.map(
+        (await api().get(`/showings${query}`).expect(200)).body.items.map(
           (showing: { id: string }) => showing.id,
         );
 
@@ -272,9 +276,83 @@ describe('Cinema API (e2e)', () => {
         await createShowing(film.id, hall.id),
       ];
       const { body } = await api().get('/showings').expect(200);
-      expect(body.map((showing: { id: string }) => showing.id)).toEqual(
+      expect(body.items.map((showing: { id: string }) => showing.id)).toEqual(
         created.map((showing) => showing.id).sort(),
       );
+    });
+
+    describe('pagination and sorting', () => {
+      let created: { id: string; startsAt: string }[];
+
+      beforeEach(async () => {
+        const film = await createFilm();
+        const hall = await createHall();
+        created = [];
+        for (let day = 10; day < 15; day++) {
+          created.push(
+            await createShowing(
+              film.id,
+              hall.id,
+              `2030-07-${day}T18:00:00.000Z`,
+            ),
+          );
+        }
+      });
+
+      const ids = (items: { id: string }[]) => items.map((item) => item.id);
+
+      it('returns the page envelope with defaults', async () => {
+        const { body } = await api().get('/showings').expect(200);
+        expect(body).toMatchObject({ total: 5, page: 1, limit: 20 });
+        expect(ids(body.items)).toEqual(ids(created));
+      });
+
+      it('slices pages in the database', async () => {
+        const second = await api().get('/showings?page=2&limit=2').expect(200);
+        expect(second.body).toMatchObject({ total: 5, page: 2, limit: 2 });
+        expect(ids(second.body.items)).toEqual(ids(created.slice(2, 4)));
+
+        const beyond = await api().get('/showings?page=4&limit=2').expect(200);
+        expect(beyond.body).toEqual({ items: [], total: 5, page: 4, limit: 2 });
+      });
+
+      it('sorts by start time in both directions', async () => {
+        const desc = await api().get('/showings?sort=desc&limit=3').expect(200);
+        expect(ids(desc.body.items)).toEqual(
+          ids([...created].reverse().slice(0, 3)),
+        );
+        const asc = await api().get('/showings?sort=asc&limit=1').expect(200);
+        expect(ids(asc.body.items)).toEqual([created[0].id]);
+      });
+
+      it('counts only filtered showings', async () => {
+        const { body } = await api()
+          .get('/showings?date=2030-07-12&limit=1')
+          .expect(200);
+        expect(body.total).toBe(1);
+        expect(ids(body.items)).toEqual([created[2].id]);
+      });
+
+      it.each([
+        'page=0',
+        'page=-1',
+        'page=1.5',
+        'page=abc',
+        'page=',
+        'limit=0',
+        'limit=101',
+        'limit=2.5',
+        'limit=ten',
+        'sort=up',
+        'sort=ASC',
+      ])('rejects %s with a 400', async (query) => {
+        await api().get(`/showings?${query}`).expect(400);
+      });
+
+      it('accepts the limit bounds', async () => {
+        await api().get('/showings?limit=1').expect(200);
+        await api().get('/showings?limit=100').expect(200);
+      });
     });
 
     it.each(['15.06.2030', '2030-6-15', '2030-02-30', '2030-13-01', ''])(
@@ -363,6 +441,35 @@ describe('Cinema API (e2e)', () => {
       expect(await bookedSeats()).toEqual([]);
     });
 
+    it('answers 409 without database error text', async () => {
+      await book([{ row: 1, seat: 1 }]).expect(201);
+      const { body } = await book([{ row: 1, seat: 1 }]).expect(409);
+      expect(body).toEqual({
+        statusCode: 409,
+        message: 'Already booked: row 1 seat 1',
+        error: 'Conflict',
+        path: `/showings/${showing.id}/bookings`,
+        timestamp: expect.any(String),
+      });
+      expect(JSON.stringify(body)).not.toMatch(/duplicate|constraint|23505/i);
+    });
+
+    it('lets only one of concurrent bookings of a seat win', async () => {
+      const results = await Promise.all(
+        Array.from({ length: 5 }, (_, index) =>
+          book([
+            { row: 3, seat: 5 },
+            { row: 2, seat: index + 1 },
+          ]),
+        ),
+      );
+      const statuses = results.map((result) => result.status).sort((a, b) => a - b);
+      expect(statuses).toEqual([201, 409, 409, 409, 409]);
+      const { body } = await api().get(`/showings/${showing.id}/bookings`);
+      expect(body).toHaveLength(1);
+      expect(await bookedSeats()).toHaveLength(2);
+    });
+
     it('books nothing when one of the seats is taken', async () => {
       await book([{ row: 1, seat: 1 }]).expect(201);
       await book([
@@ -399,6 +506,23 @@ describe('Cinema API (e2e)', () => {
     });
   });
 
+  it('gives every error the same shape', async () => {
+    const { body } = await api().get(`/films/${MISSING_ID}`).expect(404);
+    expect(body).toEqual({
+      statusCode: 404,
+      message: `Film with id "${MISSING_ID}" not found`,
+      error: 'Not Found',
+      path: `/films/${MISSING_ID}`,
+      timestamp: expect.any(String),
+    });
+    const invalid = await api().post('/films').send({}).expect(400);
+    expect(invalid.body).toMatchObject({
+      statusCode: 400,
+      path: '/films',
+      message: expect.any(Array),
+    });
+  });
+
   it('serves the API docs with response codes', async () => {
     await api().get('/docs').expect(200);
     const { body } = await api().get('/docs-json').expect(200);
@@ -410,5 +534,14 @@ describe('Cinema API (e2e)', () => {
     expect(
       body.components.schemas.CreateBookingDto.properties.seats,
     ).toBeDefined();
+    expect(
+      Object.keys(body.components.schemas.ShowingsPageDto.properties),
+    ).toEqual(['items', 'total', 'page', 'limit']);
+    const params = body.paths['/showings'].get.parameters.map(
+      (param: { name: string }) => param.name,
+    );
+    expect(params).toEqual(
+      expect.arrayContaining(['filmId', 'date', 'page', 'limit', 'sort']),
+    );
   });
 });

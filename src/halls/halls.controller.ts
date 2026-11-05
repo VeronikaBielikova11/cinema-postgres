@@ -36,14 +36,14 @@ export class HallsController {
       'Поле відсутнє, має неправильний тип або число не є цілим додатним',
   })
   @ApiConflictResponse({ description: 'Зал з такою назвою вже існує' })
-  create(@Body() dto: CreateHallDto): Hall {
+  create(@Body() dto: CreateHallDto): Promise<Hall> {
     return this.hallsService.create(dto);
   }
 
   @Get()
   @ApiOperation({ summary: 'Отримати всі зали' })
   @ApiOkResponse({ type: [Hall], description: 'Масив залів' })
-  findAll(): Hall[] {
+  findAll(): Promise<Hall[]> {
     return this.hallsService.findAll();
   }
 
@@ -51,7 +51,7 @@ export class HallsController {
   @ApiOperation({ summary: 'Отримати зал із переліком місць' })
   @ApiOkResponse({ type: HallWithSeats, description: 'Зал і його місця' })
   @ApiNotFoundResponse({ description: 'Залу з таким id немає' })
-  findOne(@Param('id', parseIdPipe) id: string): HallWithSeats {
+  findOne(@Param('id', parseIdPipe) id: string): Promise<HallWithSeats> {
     return this.hallsService.findOneWithSeats(id);
   }
 
@@ -61,7 +61,7 @@ export class HallsController {
   @ApiNoContentResponse({ description: 'Зал видалено' })
   @ApiNotFoundResponse({ description: 'Залу з таким id немає' })
   @ApiConflictResponse({ description: 'На зал посилається сеанс' })
-  remove(@Param('id', parseIdPipe) id: string): void {
-    this.hallsService.remove(id);
+  remove(@Param('id', parseIdPipe) id: string): Promise<void> {
+    return this.hallsService.remove(id);
   }
 }
